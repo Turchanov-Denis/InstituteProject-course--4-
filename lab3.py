@@ -1,117 +1,195 @@
+"""
+Лабораторная работа №3. Стохастические модели — метод Монте-Карло.
+Вариант: область между двумя спиралями Архимеда (3 витка).
+Интеграл: I = ∬_D (x^2 + y^3) dA.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+
+# ------------------------ 1. Параметры ------------------------
+
+# Спирали
+a1, b1 = 0.0, 1.0
+a2, b2 = 0.0, 1.0
+delta = 2 * np.pi
+num_turns = 3
+
+theta_max = 2 * np.pi * num_turns  # 0 → 6π
+
+# Макс радиус
+r_max = a2 + b2 * theta_max + delta     # = 8π
+
+# Охватывающий прямоугольник
+xmin, xmax = -r_max, r_max
+ymin, ymax = -r_max, r_max
+S_box = (xmax - xmin) * (ymax - ymin)
+
+# Параметры эксперимента
+Ns = [1_000, 3_000, 10_000, 30_000, 100_000]
+SEED = 42
 
 
-"""
-Определяем область интегрирования (у нас — область между двумя спиралями).
-
-Генерируем случайные точки внутри "прямоугольника", покрывающего всю область.
-
-Выбираем точки, которые реально лежат внутри области (маска mask).
-
-Вычисляем функцию f(x,y) для этих точек.
-
-Берём среднее значение функции на точках внутри области.
-
-Умножаем на площадь области, чтобы получить приближённое значение интеграла:
-"""
-
-a1, b1 = 0, 1  # Внутренняя спираль: r_in(θ) = a1 + b1*θ
-a2, b2 = 0, 1  # Внешняя спираль: r_out(θ) = a2 + b2*θ + 2π
-num_turns = 3  # Количество витков спирали
-theta_max = 2 * np.pi * num_turns  # Максимальный угол в радианах (3 полных витка)
-
+# ------------------------ 2. Спирали ------------------------
 
 def r_in(theta):
-    """
-    Радиус внутренней спирали Архимеда.
-    """
-    return a1 + b1 * theta
+    return a1 + b1 * theta      # θ
 
 def r_out(theta):
+    return a2 + b2 * theta + delta  # θ + 2π
+
+
+def f_xy(x, y):
+    """Подынтегральная функция"""
+    return x**2 + y**3
+
+
+# ------------------------ 3. Принадлежность точек области ------------------------
+
+def region_mask(x, y):
     """
-    Радиус внешней спирали Архимеда с добавленным смещением 2π.
+    Определяет, какие точки (x, y) принадлежат области D между
+    двумя спиралями Архимеда.
+
+    Идея:
+      1) Переходим к полярным координатам: r = sqrt(x^2 + y^2), θ0 = atan2(y, x).
+      2) Функции спиралей заданы для θ ∈ [0, θ_max].
+         Но atan2 возвращает угол в диапазоне (-π, π], поэтому
+         сначала приводим θ0 к [0, 2π), затем добавляем 2π * k
+         (k = 0, 1, ..., num_turns-1), чтобы получить возможные углы θ_k
+         в [0, θ_max].
+      3) Точка принадлежит области, если существует такое θ_k, что
+            r_in(θ_k) <= r <= r_out(θ_k).
     """
-    return a2 + b2 * theta + 2 * np.pi
+
+    r = np.hypot(x, y)
+    theta0 = np.arctan2(y, x)
+
+    # приводим угол в [0,2π)
+    theta0 = np.where(theta0 < 0, theta0 + 2*np.pi, theta0)
+
+    inside = np.zeros_like(r, dtype=bool)
+
+    # перебираем витки
+    for k in range(num_turns+1):
+        theta = theta0 + 2*np.pi*k
+        valid = (theta >= 0) & (theta <= theta_max)
+
+        rin = r_in(theta)
+        rout = r_out(theta)
+
+        inside |= valid & (r >= rin) & (r <= rout)
+
+    return inside
 
 
-def monte_carlo_area_and_integral(N):
+# ------------------------ 4. Метод Монте-Карло ------------------------
+
+def monte_carlo_spirals(N, rng):
     """
-    Метод Монте-Карло для вычисления площади и интеграла функции
-    z = x^2 + y^3 по области между внутренней и внешней спиралями Архимеда.
+    Оценка площади области D и интеграла I = ∬_D (x^2 + y^3) dA
+    методом Монте-Карло.
+
+    Алгоритм:
+      1) Равномерно генерируем N точек (x_i, y_i) в охватывающем
+         прямоугольнике B: [xmin, xmax] × [ymin, ymax].
+      2) Для каждой точки определяем, попала ли она в область D:
+            inside_i ∈ {0, 1}.
+      3) Оценка площади:
+            p̂ = (1/N) * Σ inside_i      — доля попаданий в D;
+            Ŝ(D) = S_box * p̂          — оценка площади области.
+         Стандартная ошибка (SE) площади:
+            SE_S = S_box * sqrt( p̂(1 - p̂) / N ).
+      4) Оценка интеграла:
+            I = ∬_D f(x, y) dA ≈ S_box * (1/N) * Σ [ f(x_i, y_i) * inside_i ].
+         Стандартная ошибка (SE) интеграла:
+            оцениваем дисперсию по выборке и используем σ̂ / sqrt(N).
     """
 
-    # --------------------------
-    # 1. Генерация случайных точек
-    # --------------------------
-    # Случайные углы θ равномерно распределены на [0, θ_max]
-    theta = np.random.uniform(0, theta_max, N)
+    # равномерные
+    xs = rng.uniform(xmin, xmax, size=N)
+    ys = rng.uniform(ymin, ymax, size=N)
 
-    # Максимальный радиус внешней спирали для генерации точек
-    r_max_val = np.max(r_out(np.linspace(0, theta_max, 1000)))
+    inside = region_mask(xs, ys)
 
-    # Случайные радиусы r равномерно на [0, r_max_val]
-    # Это создаёт "полярный прямоугольник" в координатах (r, θ), из которого мы потом выбираем точки внутри области
-    r = np.random.uniform(0, r_max_val, N)
+    # площадь
+    p_hat = inside.mean() # доля точек в области
+    area_est = S_box * p_hat
+    area_se = S_box * np.sqrt(p_hat*(1-p_hat)/N)
 
-    # --------------------------
-    # 2. Маска точек внутри области между спиралями
-    # --------------------------
-    # Каждая точка проверяется: r_in(θ) <= r <= r_out(θ)
-    # Только эти точки учитываются при расчёте площади и интеграла
-    mask = (r >= r_in(theta)) & (r <= r_out(theta))
+    # интеграл
+    values = f_xy(xs, ys) * inside
+    integral_est = S_box * values.mean()
+    # Выборочная дисперсия (ddof=1) для оценки стандартной ошибки
+    var_hat = values.var(ddof=1) if N>1 else 0
+    integral_se = S_box * np.sqrt(var_hat/N)
 
-    # --------------------------
-    # 3. Перевод в декартовы координаты для визуализации и функции
-    # --------------------------
-    x = r * np.cos(theta)
-    y = r * np.sin(theta)
-
-    # --------------------------
-    # 4. Вычисление площади методом Монте-Карло
-    # --------------------------
-    # Площадь всего "полярного прямоугольника":
-    # В полярных координатах элемент площади: dA = r dr dθ
-    # Интеграл по r от 0 до r_max: ∫0^r_max r dr = 0.5 * r_max^2
-    # Интеграл по θ от 0 до θ_max: ∫0^θ_max dθ = θ_max
-    # Следовательно, площадь всего прямоугольника = 0.5 * r_max^2 * θ_max
-    area_total = 0.5 * r_max_val**2 * theta_max
-
-    # Площадь области = площадь прямоугольника * доля точек внутри области
-    area = area_total * np.sum(mask) / N
-
-    # --------------------------
-    # 5. Вычисление интеграла функции z = x^2 + y^3
-    # --------------------------
-    z = x**2 + y**3
-    # Берём среднее значение функции на точках внутри области и умножаем на площадь
-    integral = area * np.mean(z[mask])
-
-    return area, integral, x, y, mask
+    return area_est, area_se, integral_est, integral_se
 
 
-N_values = [1000, 5000, 10000, 50000, 100000]
-results = []
+# ------------------------ 5. MAIN ------------------------
 
-plt.figure(figsize=(15, 10))
+rng = np.random.default_rng(SEED)
 
-for i, N in enumerate(N_values, 1):
-    area, integral, x, y, mask = monte_carlo_area_and_integral(N)
-    results.append((N, area, integral))
+rows = []
+for N in Ns:
+    A, Ase, I, Ise = monte_carlo_spirals(N, rng)
+    rows.append((N, A, Ase, I, Ise))
 
-    # Визуализация точек внутри области
-    plt.subplot(3, 2, i)
-    plt.scatter(x[mask], y[mask], color='blue', s=1, label='точки внутри области')
-    plt.title(f"N={N}\nПлощадь≈{area:.2f}, Интеграл≈{integral:.2f}")
-    plt.axis('equal')
+df = pd.DataFrame(rows, columns=["N","Area","Area_SE","Integral","Int_SE"])
+print(df)
+
+# ------------------------ 8. 5 Рисунков с точками внутри области ------------------------
+
+Ns_plot = [1_000, 5_000, 10_000, 50_000, 100_000]
+
+plt.figure(figsize=(12,10))
+
+for i, N in enumerate(Ns_plot, start=1):
+    xs = rng.uniform(xmin, xmax, size=N)
+    ys = rng.uniform(ymin, ymax, size=N)
+    inside = region_mask(xs, ys)
+
+    plt.subplot(3, 2, i)      # сетка 3 × 2
+    plt.scatter(xs[inside], ys[inside], s=1, color='blue')
+    plt.title(f"N = {N}")
     plt.xlabel("x")
     plt.ylabel("y")
-    plt.legend(markerscale=5)
+    plt.gca().set_aspect("equal", "box")
 
 plt.tight_layout()
 plt.show()
 
+# ------------------------ 6. График сходимости площади ------------------------
 
-print("N\tПлощадь\tИнтеграл")
-for r in results:
-    print(f"{r[0]}\t{r[1]:.6f}\t{r[2]:.6f}")
+plt.figure()
+plt.plot(df["N"], df["Area"], marker='o')
+plt.fill_between(df["N"],
+                 df["Area"] - 2*df["Area_SE"],
+                 df["Area"] + 2*df["Area_SE"],
+                 alpha=0.2)
+plt.xscale("log")
+plt.xlabel("Количество точек N (log)")
+plt.ylabel("Площадь области")
+plt.title("Сходимость площади (Монте-Карло)")
+plt.grid(True)
+plt.show()
+
+
+# ------------------------ 7. График сходимости интеграла ------------------------
+
+plt.figure()
+plt.plot(df["N"], df["Integral"], marker='o')
+plt.fill_between(df["N"],
+                 df["Integral"] - 2*df["Int_SE"],
+                 df["Integral"] + 2*df["Int_SE"],
+                 alpha=0.2)
+plt.xscale("log")
+plt.xlabel("Количество точек N (log)")
+plt.ylabel("Интеграл")
+plt.title("Сходимость интеграла (Монте-Карло)")
+plt.grid(True)
+plt.show()
+
+
