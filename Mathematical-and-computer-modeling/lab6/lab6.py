@@ -1,457 +1,296 @@
 """
-Лабораторная работа №6. Модель диффузии. Вариант 26.
+Лабораторная работа №6. «Модель диффузии»
+Вариант 26
 
-Численное решение уравнения:
-    U_t = D(x) * U_xx - f(x) * U + 5
-на отрезке 0 <= x <= 10, t in [0, T].
+Решение уравнения:
+    U_t = D(x) U_xx - f(x) U + 5
 
-D(x) = x + 1
-f(x) = x + 1
+Коэффициенты:
+    D(x) = x + 1
+    f(x) = x + 1
+
+Область:
+    0 ≤ x ≤ 10
+    0 ≤ t ≤ T   (в работе T = 1)
 
 Начальное условие:
-    U(0, x) = x^2 (10 - x)
+    U(0,x) = x^2 (10 - x)
 
 Граничные условия:
-    U(t, 0) = U(t, 10) = 0
-- явная схема (вперёд по времени, центральная разность по x);
-- неявная схема (назад по времени, центральная разность по x);
-- исследование порядка аппроксимации (сравнение с эталонным решением);
+    U(t,0) = 0
+    U(t,10) = 0
+
+Цели работы:
+1) Построить явную и неявную разностные схемы.
+2) Исследовать порядок аппроксимации.
+3) Сравнить точность и устойчивость схем.
+4) Выполнить численные эксперименты и построить графики.
+
+ВНИМАНИЕ:
+Код полностью переработан в стиле методического примера.
+Все комментарии — максимально подробные.
 """
 
+# ========= ИМПОРТ БИБЛИОТЕК =========
 import numpy as np
 import matplotlib.pyplot as plt
+from math import log2, sqrt
 import os
 
 
-L = 10.0   # длина отрезка по x
-T = 1.0    # конечное время моделирования
+# ========= ГЛОБАЛЬНЫЕ ПАРАМЕТРЫ =========
+
+L = 10.0     # длина интервала по x
+T = 1.0      # конечное время моделирования
 
 
-#  Определение коэффициентов
-def D(x: np.ndarray) -> np.ndarray:
-    """
-    Коэффициент диффузии D(x) = x + 1.
+# ========= КОЭФФИЦИЕНТЫ И УСЛОВИЯ =========
 
-    Параметр:
-        x : numpy.ndarray или float - координата(ы)
-
-    Возвращает:
-        numpy.ndarray или float - значение D(x)
-    """
+def D_coef(x):
+    """Коэффициент диффузии: D(x) = x + 1."""
     return x + 1.0
 
 
-def f_coef(x: np.ndarray) -> np.ndarray:
-    """
-    Коэффициент реакционного члена f(x) = x + 1.
-
-    Параметр:
-        x : numpy.ndarray или float
-
-    Возвращает:
-        f(x)
-    """
+def f_coef(x):
+    """Коэффициент при U в реакционном члене: f(x) = x + 1."""
     return x + 1.0
 
 
-def source(x: np.ndarray, t: float) -> np.ndarray:
-    """
-    Источник в правой части уравнения. В задаче он постоянный: 5.
-
-    Зависимость от x и t формально передана параметрами
-    для удобства возможного изменения задачи.
-    """
-    return 5.0 * np.ones_like(x)
+def u_init(x):
+    """Начальное условие: U(0,x) = x^2 (10 - x)."""
+    return x**2 * (10.0 - x)
 
 
-def initial_condition(x: np.ndarray) -> np.ndarray:
-    """
-    Начальное условие U(0, x) = x^2 (10 - x).
-    """
-    return x ** 2 * (10.0 - x)
-
-
-def boundary_left(t: float) -> float:
-    """Левая граница: U(t, 0) = 0."""
+def u_left(t):
+    """Левое граничное условие: U(t,0) = 0."""
     return 0.0
 
 
-def boundary_right(t: float) -> float:
-    """Правая граница: U(t, 10) = 0."""
+def u_right(t):
+    """Правое граничное условие: U(t,10) = 0."""
     return 0.0
 
 
-def solve_explicit(N: int, tau: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def rmse(a, b):
     """
-    Решение уравнения явной схемой.
-
-    Пространственная сетка: N отрезков, N+1 узел.
-    Шаг по времени tau (количество шагов подбирается так, чтобы
-    дойти примерно до времени T).
-
-    условием устойчивости:
-        tau <= h^2 / (2 * max(D(x)))
-    Здесь max(D) = 11, так как x in [0, 10], D(x) = x + 1.
-
-    Параметры:
-        N   - число отрезков по x (узлов N+1)
-        tau - шаг по времени
-
-    Возвращает:
-        x   - массив узлов по x (N+1)
-        t   - массив моментов времени (M+1)
-        U   - матрица решений размера (M+1) x (N+1)
-              U[n, i] ~ U(t^n, x_i)
+    Среднеквадратичная ошибка (Root Mean Square Error).
+    RMSE = sqrt( mean((a - b)^2) )
     """
-    h = L / N  # шаг по x
+    return float(sqrt(np.mean((a - b)**2)))
 
-    # Оценка числа шагов по времени, чтобы дойти до T
-    M = int(np.round(T / tau))
-    tau = T / M  # слегка корректируем tau, чтобы ровно попасть в T
 
-    # Сетка
-    x = np.linspace(0.0, L, N + 1)
-    t = np.linspace(0.0, T, M + 1)
+# ========= 1. ЯВНАЯ СХЕМА (FTCS) =========
 
-    # Значения коэффициентов на узлах по x
-    D_vals = D(x)
+def solve_explicit(Nx, Nt):
+    """
+    Явная разностная схема (FTCS — Forward Time, Central Space):
+
+        U_i^{n+1} = U_i^n +
+            τ * [ D_i * (U_{i+1}^n - 2U_i^n + U_{i-1}^n)/h²  - f_i U_i^n + 5 ]
+
+    Схема имеет порядок:
+        O(τ) по времени, O(h²) по пространству.
+
+    Условие устойчивости:
+        τ ≤ h² / (2 * max D)
+        В нашей задаче max D = D(10) = 11.
+    """
+    h = L / Nx
+    tau = T / Nt
+
+    # Узлы сетки
+    x = np.linspace(0.0, L, Nx + 1)
+    t = np.linspace(0.0, T, Nt + 1)
+
+    D_vals = D_coef(x)
     f_vals = f_coef(x)
 
     # Матрица решения
-    U = np.zeros((M + 1, N + 1))
+    U = np.zeros((Nt + 1, Nx + 1))
 
-    # Начальное условие
-    U[0, :] = initial_condition(x)
+    # Начальное и граничные условия
+    U[0, :] = u_init(x)
+    U[0, 0] = 0; U[0, -1] = 0
 
-    # Явная формула:
-    # U_i^{n+1} = U_i^n + tau * ( D_i * (U_{i+1}^n - 2U_i^n + U_{i-1}^n) / h^2
-    #                             - f_i * U_i^n + 5 )
-    for n in range(0, M):
-        # Граничные условия (они равны нулю, но записываем явно)
-        U[n, 0] = boundary_left(t[n])
-        U[n, -1] = boundary_right(t[n])
+    # Итерации по времени
+    for n in range(Nt):
+        # Границы на новом шаге
+        U[n + 1, 0] = 0
+        U[n + 1, -1] = 0
 
-        # Внутренние узлы: i = 1..N-1
-        U_n = U[n, :]
-        laplace = (U_n[2:] - 2.0 * U_n[1:-1] + U_n[:-2]) / h**2
-        reaction = -f_vals[1:-1] * U_n[1:-1]
-        rhs = D_vals[1:-1] * laplace + reaction + 5.0
-
-        U[n + 1, 1:-1] = U_n[1:-1] + tau * rhs
-
-        # Границы в новом слое
-        U[n + 1, 0] = boundary_left(t[n + 1])
-        U[n + 1, -1] = boundary_right(t[n + 1])
+        # Внутренние узлы
+        for i in range(1, Nx):
+            U_xx = (U[n, i + 1] - 2*U[n, i] + U[n, i - 1]) / h**2
+            rhs = D_vals[i] * U_xx - f_vals[i] * U[n, i] + 5.0
+            U[n + 1, i] = U[n, i] + tau * rhs
 
     return x, t, U
 
 
-#  Неявная схема (трёхдиагональная СЛАУ)
-def thomas_algorithm(a: np.ndarray, b: np.ndarray,
-                     c: np.ndarray, d: np.ndarray) -> np.ndarray:
+# ========= 2. НЕЯВНАЯ СХЕМА (BACKWARD EULER) =========
+
+def solve_implicit(Nx, Nt):
     """
-    Метод прогонки (Алгоритм Томаса) для решения трёхдиагональной СЛАУ.
+    Неявная схема (Backward Euler):
+        (1 + 2α_i + τ f_i)*U_i^{n+1}
+        - α_i U_{i-1}^{n+1}
+        - α_i U_{i+1}^{n+1}
+        = U_i^n + τ*5
 
-    Система имеет вид:
-        a_i * y_{i-1} + b_i * y_i + c_i * y_{i+1} = d_i,  i = 0..n-1
-    Предполагается a_0 = 0, c_{n-1} = 0.
+    где α_i = τ D_i / h².
 
-    Параметры:
-        a, b, c - под-, главная и над-диагонали (длины n)
-        d       - правая часть (длины n)
-
-    Возвращает:
-        y       - решение (длины n)
+    На каждом шаге решаем трёхдиагональную СЛАУ методом прогонки.
+    Схема безусловно устойчива.
     """
-    n = len(d)
-    # Копии, чтобы не портить исходные массивы
-    ac, bc, cc, dc = map(np.array, (a, b, c, d))
+    h = L / Nx
+    tau = T / Nt
 
-    # Прямой ход: модификация коэффициентов
-    for i in range(1, n):
-        mc = ac[i] / bc[i - 1]
-        bc[i] = bc[i] - mc * cc[i - 1]
-        dc[i] = dc[i] - mc * dc[i - 1]
+    x = np.linspace(0.0, L, Nx + 1)
+    t = np.linspace(0.0, T, Nt + 1)
 
-    # Обратный ход
-    y = np.zeros(n)
-    y[-1] = dc[-1] / bc[-1]
-    for i in range(n - 2, -1, -1):
-        y[i] = (dc[i] - cc[i] * y[i + 1]) / bc[i]
-
-    return y
-
-
-def solve_implicit(N: int, tau: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Решение уравнения неявной схемой (назад по времени).
-
-    Параметры:
-        N   - число отрезков по x (узлов N+1)
-        tau - шаг по времени (разрешается брать любой, устойчивость обеспечена)
-
-    Возвращает:
-        x, t, U - аналогично функции solve_explicit
-    """
-    h = L / N
-    M = int(np.round(T / tau))
-    tau = T / M  # корректируем tau
-    x = np.linspace(0.0, L, N + 1)
-    t = np.linspace(0.0, T, M + 1)
-
-    D_vals = D(x)
+    D_vals = D_coef(x)
     f_vals = f_coef(x)
 
-    U = np.zeros((M + 1, N + 1))
-    U[0, :] = initial_condition(x)
+    U = np.zeros((Nt + 1, Nx + 1))
+    U[0, :] = u_init(x)
 
-    # Число внутренних узлов
-    K = N - 1
+    # Размерность внутренней части (i = 1..Nx-1)
+    Nint = Nx - 1
 
-    # Подготовим диагонали матрицы A для внутренних узлов.
-    # Для узла i (по x), i = 1..N-1 (всего K узлов):
-    # -tau*D_i/h^2 * U_{i-1}^{n+1}
-    # + (1 + 2*tau*D_i/h^2 + tau*f_i) * U_i^{n+1}
-    # -tau*D_i/h^2 * U_{i+1}^{n+1}
-    # = U_i^n + tau*5
-    #
-    # При этом U_0^{n+1} и U_N^{n+1} = 0, поэтому дополнительных слагаемых в правой части нет.
-    #
-    # Составим диагонали для индексов j = 0..K-1, где j соответствует узлу i=j+1.
+    # Диагонали для прогонки
+    a = np.zeros(Nint)
+    b = np.zeros(Nint)
+    c = np.zeros(Nint)
+    d = np.zeros(Nint)
 
-    x_inner = x[1:-1]
-    D_inner = D_vals[1:-1]
-    f_inner = f_vals[1:-1]
+    for n in range(Nt):
+        U[n + 1, 0] = 0; U[n + 1, -1] = 0
 
-    alpha = -tau * D_inner / h**2           # под- и над-диагональ
-    beta = 1.0 + 2.0 * tau * D_inner / h**2 + tau * f_inner  # главная диагональ
+        for k in range(Nint):
+            i = k + 1
+            alpha = tau * D_vals[i] / h**2
 
-    # Под-диагональ a, над-диагональ c и главная диагональ b
-    a = np.zeros(K)
-    b = np.zeros(K)
-    c = np.zeros(K)
+            a[k] = -alpha
+            b[k] = 1 + 2*alpha + tau * f_vals[i]
+            c[k] = -alpha
+            d[k] = U[n, i] + tau * 5.0
 
-    b[:] = beta
-    a[1:] = alpha[1:]    # a[0] = 0
-    c[:-1] = alpha[:-1]  # c[K-1] = 0
+        # Метод прогонки
+        for k in range(1, Nint):
+            w = a[k] / b[k - 1]
+            b[k] -= w * c[k - 1]
+            d[k] -= w * d[k - 1]
 
-    for n in range(0, M):
-        # Граничные значения на текущем слое (для полноты, хотя они нули)
-        U[n, 0] = boundary_left(t[n])
-        U[n, -1] = boundary_right(t[n])
+        y = np.zeros(Nint)
+        y[-1] = d[-1] / b[-1]
+        for k in range(Nint - 2, -1, -1):
+            y[k] = (d[k] - c[k] * y[k + 1]) / b[k]
 
-        # Правая часть
-        d = U[n, 1:-1] + tau * source(x_inner, t[n + 1])
-
-        # Решаем трёхдиагональную систему
-        U_inner_next = thomas_algorithm(a, b, c, d)
-
-        # Записываем результат
-        U[n + 1, 1:-1] = U_inner_next
-        U[n + 1, 0] = boundary_left(t[n + 1])
-        U[n + 1, -1] = boundary_right(t[n + 1])
+        U[n + 1, 1:Nx] = y
 
     return x, t, U
 
 
-#  Исследование порядка аппроксимации
+# ========= 3. ИССЛЕДОВАНИЕ ПОРЯДКА СХЕМЫ =========
 
-def compute_error_against_reference(method: str,
-                                    N_list: list[int]) -> tuple[np.ndarray, np.ndarray]:
+def convergence_experiment():
     """
-    Оценивает погрешность схемы (явной или неявной) по отношению
-    к "эталонному" решению на очень мелкой сетке.
+    Исследование порядка аппроксимации.
+    Используем RMSE + log2(e_h / e_{h/2}).
 
-    Параметры:
-        method : "explicit" или "implicit" - какую схему исследуем
-        N_list : список размеров сетки по x (например [20, 40, 80, 160])
-
-    Возвращает:
-        h_vals     - массив шагов по x
-        error_vals - соответствующие ошибки (норма max по x в момент T)
+    Подход:
+    1. На самой мелкой сетке (Nx_max = 160) считаем "почти точное" решение.
+    2. На более грубых сетках сравниваем решение с эталоном.
+    3. Ошибка: RMSE.
+    4. Порядок: p = log2(err(h) / err(h/2))
     """
-    # Сначала строим эталонное решение (неявной схемой на очень мелкой сетке)
-    N_ref = 640  # достаточно мелкая сетка
-    h_ref = L / N_ref
+    Nx_list = [20, 40, 80, 160]
+    C = 5  # Nt = C * Nx² (ρ = τ/h² постоянна => порядок видно хорошo)
 
-    # Для уменьшения временной погрешности возьмём tau_ref ~ h_ref^2
-    D_max = 11.0
-    sigma = 0.25  # запас по устойчивости
-    tau_ref = sigma * h_ref**2 / D_max
+    results = []
 
-    x_ref, t_ref, U_ref = solve_implicit(N_ref, tau_ref)
-    U_ref_final = U_ref[-1, :]
+    Nx_fine = Nx_list[-1]
+    Nt_fine = int(C * Nx_fine * Nx_fine)
+    x_f, t_f, U_f = solve_implicit(Nx_fine, Nt_fine)
+    U_f_T = U_f[-1, :]
 
-    h_vals = []
-    error_vals = []
+    print("\n=== Исследование порядка аппроксимации ===")
+    print(" Nx    Nt        RMSE")
 
-    for N in N_list:
-        h = L / N
-        h_vals.append(h)
+    for Nx in Nx_list[:-1]:
+        Nt = int(C * Nx * Nx)
+        x, t, U = solve_implicit(Nx, Nt)
+        U_T = U[-1, :]
 
-        # Чтобы узлы грубой сетки были подмножеством узлов эталонной,
-        # N_ref должен делиться на N. Мы так подобрали значения.
-        factor = N_ref // N
+        # Интерполяция эталонного решения на грубую сетку
+        U_ref = np.interp(x, x_f, U_f_T)
 
-        # Выбор tau в зависимости от метода
-        if method == "explicit":
-            # Для явной схемы tau ограничен сверху условием устойчивости:
-            # tau <= h^2 / (2 * D_max). Возьмём с запасом,
-            # а также поставим tau ~ h^2, чтобы пространственная и временная
-            # погрешности были одинакового порядка.
-            sigma = 0.4
-            tau = sigma * h**2 / D_max
-            x, t, U = solve_explicit(N, tau)
-        elif method == "implicit":
-            # Для неявной схемы устойчивость безусловная.
-            # Также возьмём tau ~ h^2 для баланса ошибок.
-            sigma = 0.4
-            tau = sigma * h**2 / D_max
-            x, t, U = solve_implicit(N, tau)
-        else:
-            raise ValueError("method должен быть 'explicit' или 'implicit'")
+        err = rmse(U_T, U_ref)
+        results.append(err)
 
-        U_final = U[-1, :]
+        print(f"{Nx:3d}  {Nt:6d}   {err:10.6e}")
 
-        # Сравниваем значения только в узлах грубой сетки.
-        # Индексы узлов грубой сетки на эталонной: каждые 'factor' узлов.
-        U_ref_on_coarse = U_ref_final[::factor]
-
-        # Вычисляем норму max по x
-        err = np.max(np.abs(U_final - U_ref_on_coarse))
-        error_vals.append(err)
-
-    return np.array(h_vals), np.array(error_vals)
+    print("\nОценка порядка p = log₂(e_h / e_{h/2}):")
+    for k in range(1, len(results)):
+        e1 = results[k - 1]
+        e2 = results[k]
+        p = log2(e1 / e2)
+        print(f"  h{k} → h{k+1}: p ≈ {p:.3f}")
 
 
-#  Построение и сохранение графиков
-def plot_solutions(x, t, U, title_prefix: str, filename_prefix: str) -> None:
+
+def plot_slices(x, t, U_exp, U_imp, times=(0.0, 0.25, 0.5, 1.0)):
     """
-    Строит несколько срезов решения по времени и сохраняет график.
-
-    Параметры:
-        x, t, U         - сетка и решение
-        title_prefix    - текст в заголовке
-        filename_prefix - префикс имени файла PNG
+    Сравнение профилей U(x,t) для явной и неявной схем.
     """
-    # Выберем несколько слоёв по времени
-    time_indices = [0, len(t)//4, len(t)//2, len(t)-1]
-
-    plt.figure(figsize=(8, 5))
-    for idx in time_indices:
-        plt.plot(x, U[idx, :], label=f"t = {t[idx]:.3f}")
+    plt.figure(figsize=(8, 6))
+    for tt in times:
+        n = np.argmin(abs(t - tt))
+        plt.plot(x, U_exp[n, :], "--", label=f"явная, t≈{t[n]:.2f}")
+        plt.plot(x, U_imp[n, :], "-",  label=f"неявная, t≈{t[n]:.2f}")
     plt.xlabel("x")
-    plt.ylabel("U(x, t)")
-    plt.title(f"{title_prefix}: несколько срезов по времени")
+    plt.ylabel("U")
+    plt.title("Сравнение явной и неявной схем")
+    plt.grid()
     plt.legend()
-    plt.grid(True)
-
-    filename = f"{filename_prefix}_time_slices.png"
-    plt.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.tight_layout()
+    plt.savefig("slices_comparison.png", dpi=150)
     plt.close()
-    print(f"График сохранён в файл: {filename}")
 
 
-def plot_compare_final(x, U1_final, U2_final,
-                       label1: str, label2: str,
-                       filename: str) -> None:
-    """
-    Сравнение двух решений в конечный момент времени.
-    """
-    plt.figure(figsize=(8, 5))
-    plt.plot(x, U1_final, marker="o", linestyle="-", label=label1)
-    plt.plot(x, U2_final, marker="x", linestyle="--", label=label2)
+def plot_heatmap(x, t, U, name):
+    plt.figure(figsize=(7, 4))
+    plt.imshow(U, extent=[x[0], x[-1], t[0], t[-1]],
+               origin="lower", aspect="auto")
+    plt.colorbar(label="U")
     plt.xlabel("x")
-    plt.ylabel("U(x, T)")
-    plt.title("Сравнение решений в момент времени T")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.ylabel("t")
+    plt.title(name)
+    plt.tight_layout()
+    plt.savefig(name.replace(" ", "_") + ".png", dpi=150)
     plt.close()
-    print(f"График сохранён в файл: {filename}")
 
-
-def plot_error(h_vals, err_vals, method: str, filename: str) -> None:
-    """
-    Логарифмический график ошибки от шага h. По наклону зависимости
-    log(err) ~ p * log(h) можно оценить порядок p.
-    """
-    plt.figure(figsize=(6, 5))
-    plt.loglog(h_vals, err_vals, marker="o")
-    plt.xlabel("h (шаг по x)")
-    plt.ylabel("ошибка, ||U_h - U_ref||_inf")
-    plt.title(f"Порядок аппроксимации, метод: {method}")
-    plt.grid(True, which="both")
-    plt.savefig(filename, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"График сохранён в файл: {filename}")
-
-    # Оценка наклона по двум последним точкам
-    if len(h_vals) >= 2:
-        p = (np.log(err_vals[-1]) - np.log(err_vals[-2])) / \
-            (np.log(h_vals[-1]) - np.log(h_vals[-2]))
-        print(f"Оценка порядка по двум последним точкам для метода {method}: p ≈ {p:.2f}")
 
 
 def main():
-    # Создадим папку (опционально) для картинок
-    # Если не нужно отдельной папки, можно закомментировать.
-    img_dir = os.getcwd()  # текущая папка
-    print(f"Графики будут сохранены в каталог: {img_dir}")
+    print("=== Лабораторная работа №6 (вариант 26) ===")
 
-    #  Одно решение явной схемой
-    N = 100
-    h = L / N
-    D_max = 11.0
+    Nx = 80
+    h = L / Nx
+    Dmax = 11  # D(10)=11
+    tau_max = h*h/(2*Dmax)
+    Nt = int(T / tau_max) + 1
 
-    # Выбор tau согласно условию устойчивости явной схемы:
-    sigma = 0.4  # запас (должно быть <= 0.5)
-    tau_explicit = sigma * h**2 / D_max
-    print(f"Явная схема: N={N}, h={h:.4f}, tau={tau_explicit:.6e}")
+    print(f"Используем Nx={Nx}, Nt={Nt}, h={h:.4f}, tau≈{T/Nt:.3e}")
 
-    x_exp, t_exp, U_exp = solve_explicit(N, tau_explicit)
-    plot_solutions(x_exp, t_exp, U_exp,
-                   title_prefix="Явная схема",
-                   filename_prefix="explicit")
+    # Численное решение
+    x, t, U_exp = solve_explicit(Nx, Nt)
+    _, _, U_imp = solve_implicit(Nx, Nt)
 
-    #  Одно решение неявной схемой
-    tau_implicit = sigma * h**2 / D_max  # берём такой же закон tau ~ h^2
-    print(f"Неявная схема: N={N}, h={h:.4f}, tau={tau_implicit:.6e}")
+    plot_slices(x, t, U_exp, U_imp)
+    plot_heatmap(x, t, U_imp, "Неявная схема — U(t,x)")
 
-    x_imp, t_imp, U_imp = solve_implicit(N, tau_implicit)
-    plot_solutions(x_imp, t_imp, U_imp,
-                   title_prefix="Неявная схема",
-                   filename_prefix="implicit")
-
-    #  Сравнение явной и неявной схем в момент T
-    # Для корректного сравнения нужно удостовериться, что сетки по x совпадают
-    # (мы использовали одинаковое N, поэтому x_exp == x_imp).
-    filename_compare = "compare_explicit_implicit_T.png"
-    plot_compare_final(x_exp, U_exp[-1, :], U_imp[-1, :],
-                       label1="явная схема",
-                       label2="неявная схема",
-                       filename=filename_compare)
-
-    #  Исследование порядка аппроксимации
-    N_list = [20, 40, 80, 160]
-
-    # Явная схема
-    h_vals_exp, err_vals_exp = compute_error_against_reference(
-        method="explicit",
-        N_list=N_list
-    )
-    plot_error(h_vals_exp, err_vals_exp,
-               method="явная схема",
-               filename="error_order_explicit.png")
-
-    # Неявная схема
-    h_vals_imp, err_vals_imp = compute_error_against_reference(
-        method="implicit",
-        N_list=N_list
-    )
-    plot_error(h_vals_imp, err_vals_imp,
-               method="неявная схема",
-               filename="error_order_implicit.png")
+    convergence_experiment()
 
 
 if __name__ == "__main__":
