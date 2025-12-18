@@ -1,0 +1,12 @@
+seed_urls:
+  - https://ru.wikipedia.org/wiki/Агентство_«Локвуд_и_компания»
+  - https://ru.wikipedia.org/wiki/Страуд,_Джонатан
+  - https://ru.wikipedia.org/wiki/Категория:Приключенческие_телесериалы_Великобритании
+  - https://ru.wikipedia.org/wiki/Привидение
+  - https://ru.wikipedia.org/wiki/Сверхъестественное_(телесериал)
+
+allowed_prefix: https://ru.wikipedia.org/wiki/
+db_path: search.db
+
+pagerank_damping: 0.85
+pagerank_iters: 20
