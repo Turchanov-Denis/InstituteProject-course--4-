@@ -12,27 +12,61 @@ services:
       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
     volumes:
       - namenode:/hadoop/dfs/name
-      - ./:/host
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: datanode
+    depends_on:
+      - namenode
     environment:
       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
     volumes:
       - datanode:/hadoop/dfs/data
+    ports:
+      - "9864:9864"
+
+  resourcemanager:
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    container_name: resourcemanager
     depends_on:
       - namenode
+      - datanode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    ports:
+      - "8088:8088"
+
+  nodemanager:
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    container_name: nodemanager
+    depends_on:
+      - resourcemanager
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    ports:
+      - "5432:5432"
 
   hive-server:
     image: bde2020/hive:2.3.2-postgresql-metastore
     container_name: hive-server
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-postgresql
     ports:
       - "10000:10000"
     environment:
-      - HIVE_CORE_CONF_fs_defaultFS=hdfs://namenode:9000
-    depends_on:
-      - namenode
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+
+      # === Hive Metastore (PostgreSQL) ===
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql:5432/metastore
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName=org.postgresql.Driver
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName=hive
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword=hive
 
 volumes:
   namenode:

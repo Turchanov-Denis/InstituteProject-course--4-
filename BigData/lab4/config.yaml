@@ -4,6 +4,7 @@ seed_urls:
   - https://ru.wikipedia.org/wiki/Категория:Приключенческие_телесериалы_Великобритании
   - https://ru.wikipedia.org/wiki/Привидение
   - https://ru.wikipedia.org/wiki/Сверхъестественное_(телесериал)
+  - https://ru.wikipedia.org/wiki/Рик_и_Морти
 
 allowed_prefix: https://ru.wikipedia.org/wiki/
 db_path: search.db
